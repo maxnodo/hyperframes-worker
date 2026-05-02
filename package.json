@@ -16,6 +16,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "dotenv": "^16.4.5",
-    "hyperframes": "^0.4.42"
+    "hyperframes": "^0.4.42",
+    "openai": "^6.35.0"
   }
 }

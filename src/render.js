@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
+import { generateVideoScript } from "./ai.js";
 
 const HYPERFRAMES_COMPOSITION_ID = "hyperframes-worker-video";
 
@@ -17,7 +18,7 @@ export async function renderWithHyperframes(job, outPath) {
 
   await mkdir(path.dirname(outPath), { recursive: true });
 
-  const input = normalizeInput(job);
+  const input = await normalizeInput(job);
   console.log("final content:", input);
   const { width, height } = formatToSize(input.format);
   const duration = calculateDuration(input.scenes.length);
@@ -37,14 +38,26 @@ export async function renderWithHyperframes(job, outPath) {
   return outPath;
 }
 
-function normalizeInput(job) {
+async function normalizeInput(job) {
   const data = job?.input_data ?? {};
-  const promptContent = data.prompt && !data.mainText
-    ? parsePromptToScenes(data.prompt)
-    : {};
-  const mainText = cleanText(data.mainText ?? promptContent.mainText ?? job?.title ?? "Video");
-  const subText = cleanText(data.subText ?? promptContent.subText ?? "");
-  const scenes = normalizeScenes(data.scenes ?? promptContent.scenes);
+  const content = { ...data };
+
+  if (content.prompt && !content.mainText) {
+    try {
+      const generated = await generateVideoScript(content.prompt);
+      validateGeneratedScript(generated);
+      content.mainText = generated.mainText;
+      content.subText = generated.subText;
+      content.scenes = generated.scenes;
+    } catch (e) {
+      console.error("AI generation failed:", e);
+      throw new Error("AI generation failed");
+    }
+  }
+
+  const mainText = cleanText(content.mainText ?? job?.title ?? "Video");
+  const subText = cleanText(content.subText ?? "");
+  const scenes = normalizeScenes(content.scenes);
 
   return {
     mainText,
@@ -55,33 +68,20 @@ function normalizeInput(job) {
   };
 }
 
-function parsePromptToScenes(prompt) {
-  const cleaned = cleanPrompt(prompt);
-  const explicitScenes = [...cleaned.matchAll(/(?:^|\s)(?:escena|scene|slide)\s*\d*\s*[:.-]\s*([^.!?]+[.!?]?)/gi)]
-    .map((match) => toSceneText(match[1]))
-    .filter(Boolean);
-  const sentences = cleaned
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const candidates = sentences.length > 0 ? sentences : cleaned.split(/[,;]+/);
-  const sceneTexts = (explicitScenes.length > 0 ? explicitScenes : candidates)
-    .map((part) => toSceneText(part))
-    .filter((part) => !isPromptInstruction(part))
-    .filter(Boolean)
-    .slice(0, 5);
-  const fallbackScenes = sceneTexts.length > 0
-    ? sceneTexts
-    : ["Idea principal", "Mensaje clave", "Cierre"];
-
-  return {
-    mainText: toHeadline(fallbackScenes[0]),
-    subText: fallbackScenes[1] ? toCaption(fallbackScenes[1]) : "",
-    scenes: fallbackScenes.map((text) => ({
-      text,
-      duration: 2.5,
-    })),
-  };
+function validateGeneratedScript(value) {
+  if (!value || typeof value !== "object") {
+    throw new Error("AI output must be an object");
+  }
+  if (!cleanText(value.mainText)) {
+    throw new Error("AI output missing mainText");
+  }
+  if (!Array.isArray(value.scenes) || value.scenes.length === 0) {
+    throw new Error("AI output missing scenes");
+  }
+  const scenes = normalizeScenes(value.scenes);
+  if (scenes.length === 0) {
+    throw new Error("AI output scenes are empty");
+  }
 }
 
 function normalizeScenes(value) {
@@ -359,35 +359,6 @@ function isRenderableImageSource(value) {
 
 function cleanText(value) {
   return String(value ?? "").trim().slice(0, 240);
-}
-
-function cleanPrompt(value) {
-  return String(value ?? "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function toHeadline(value) {
-  return toSceneText(value).slice(0, 64) || "Video";
-}
-
-function toCaption(value) {
-  return toSceneText(value).slice(0, 96);
-}
-
-function toSceneText(value) {
-  return String(value ?? "")
-    .replace(/^(objetivo|contexto|instrucciones|prompt|escena|scene|slide)\s*[:.-]\s*/i, "")
-    .replace(/^(crear|generar|hacer|producir|renderizar)\s+(un|una)\s+video\s+/i, "")
-    .replace(/^[\s#>*\-–—\d.)]+/, "")
-    .trim()
-    .slice(0, 90);
-}
-
-function isPromptInstruction(value) {
-  return /^(crear|generar|hacer|producir|renderizar|necesito|quiero)\b/i.test(value)
-    || /\b(no deben aparecer|instrucciones internas|prompt completo)\b/i.test(value);
 }
 
 function escapeHtml(value) {
