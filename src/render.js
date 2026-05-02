@@ -21,7 +21,7 @@ export async function renderWithHyperframes(job, outPath) {
   const input = await normalizeInput(job);
   console.log("final content:", input);
   const { width, height } = formatToSize(input.format);
-  const duration = calculateDuration(input.scenes.length);
+  const duration = calculateDuration(input.scenes);
   const projectDir = path.join(path.dirname(outPath), "hyperframes-project");
 
   await rm(projectDir, { recursive: true, force: true });
@@ -126,14 +126,17 @@ function formatToSize(format) {
   }
 }
 
-function calculateDuration(scenesCount) {
-  return scenesCount > 0 ? 5 + scenesCount * 2.5 : 8;
+function calculateDuration(scenes) {
+  return scenes.length > 0
+    ? scenes.reduce((sum, scene) => sum + scene.duration, 0)
+    : 8;
 }
 
 function buildCompositionHtml({ mainText, subText, imageNames, scenes: contentScenes, width, height, duration }) {
   const scenes = buildScenes({ mainText, subText, imageNames, contentScenes });
+  const sceneTimings = buildSceneTimings(scenes);
   const sceneMarkup = scenes
-    .map((scene, index) => buildSceneMarkup(scene, index, width, height, duration))
+    .map((scene, index) => buildSceneMarkup(scene, sceneTimings[index], index))
     .join("\n");
 
   return `<!DOCTYPE html>
@@ -204,6 +207,24 @@ function buildCompositionHtml({ mainText, subText, imageNames, scenes: contentSc
         font-size: ${Math.max(26, Math.round(width * 0.042))}px;
         line-height: 1.22;
       }
+      .progress {
+        position: absolute;
+        left: ${Math.round(Math.min(width, height) * 0.08)}px;
+        right: ${Math.round(Math.min(width, height) * 0.08)}px;
+        bottom: ${Math.round(Math.min(width, height) * 0.055)}px;
+        height: 6px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.16);
+      }
+      .progress span {
+        display: block;
+        width: 100%;
+        height: 100%;
+        transform: scaleX(0);
+        transform-origin: left center;
+        background: #67e8f9;
+      }
       .image-frame {
         width: 100%;
         min-height: 46%;
@@ -265,11 +286,16 @@ function buildCompositionHtml({ mainText, subText, imageNames, scenes: contentSc
     <script>
       window.__timelines = window.__timelines || {};
       var tl = gsap.timeline({ paused: true });
-      var scenes = ${JSON.stringify(scenes.map((_, index) => `#scene-${index}`))};
-      var sceneDuration = ${duration / scenes.length};
+      var scenes = ${JSON.stringify(sceneTimings.map((scene, index) => ({
+        selector: `#scene-${index}`,
+        start: scene.start,
+        duration: scene.duration,
+      })))};
 
-      scenes.forEach(function(selector, index) {
-        var start = index * sceneDuration;
+      scenes.forEach(function(scene, index) {
+        var selector = scene.selector;
+        var start = scene.start;
+        var hold = Math.max(0.6, scene.duration - 0.9);
         if (index > 0) {
           tl.to(selector, { opacity: 1, duration: 0.45, ease: "power2.out" }, start);
         }
@@ -280,13 +306,25 @@ function buildCompositionHtml({ mainText, subText, imageNames, scenes: contentSc
           stagger: 0.11,
           ease: "power3.out"
         }, start + 0.18);
+        tl.to(selector + " .progress span", {
+          scaleX: 1,
+          duration: scene.duration,
+          ease: "none"
+        }, start);
         tl.to(selector + " .content", {
           y: -18,
-          duration: sceneDuration - 0.6,
+          duration: hold,
           ease: "none"
         }, start + 0.2);
         if (index < scenes.length - 1) {
-          tl.to(selector, { opacity: 0, duration: 0.38, ease: "power2.in" }, start + sceneDuration - 0.38);
+          tl.to(selector + " .content > *", {
+            y: -30,
+            opacity: 0,
+            duration: 0.3,
+            stagger: 0.05,
+            ease: "power2.in"
+          }, start + scene.duration - 0.42);
+          tl.to(selector, { opacity: 0, duration: 0.38, ease: "power2.in" }, start + scene.duration - 0.38);
         }
       });
 
@@ -298,44 +336,43 @@ function buildCompositionHtml({ mainText, subText, imageNames, scenes: contentSc
 }
 
 function buildScenes({ mainText, subText, imageNames, contentScenes }) {
-  const scenes = [
-    {
-      type: "title",
-      kicker: "HyperFrames Render",
-      title: mainText,
-      caption: subText || "Generated automatically from your video job.",
-    },
-  ];
+  const maxScenes = Math.max(imageNames.length, contentScenes.length, 1);
+  const fallbackScenes = contentScenes.length > 0
+    ? contentScenes
+    : [{ text: mainText, duration: 3 }];
+  const scenes = [];
 
-  const maxScenes = Math.max(imageNames.length, contentScenes.length);
   for (let index = 0; index < maxScenes; index += 1) {
     const imageName = imageNames[index];
-    const contentScene = contentScenes[index];
+    const contentScene = fallbackScenes[index] ?? fallbackScenes[fallbackScenes.length - 1];
     scenes.push({
       type: imageName ? "image" : "text",
-      kicker: `Slide ${index + 1}`,
+      kicker: index === maxScenes - 1 ? "Reserva hoy" : mainText,
       title: contentScene?.text ?? mainText,
-      caption: subText,
+      caption: index === 0 ? subText : "",
       imageName,
       duration: contentScene?.duration,
-    });
-  }
-
-  if (maxScenes === 0) {
-    scenes.push({
-      type: "title",
-      kicker: "Ready",
-      title: mainText,
-      caption: subText || "No image assets were provided for this job.",
     });
   }
 
   return scenes;
 }
 
-function buildSceneMarkup(scene, index) {
+function buildSceneTimings(scenes) {
+  let cursor = 0;
+  return scenes.map((scene) => {
+    const timing = {
+      start: cursor,
+      duration: scene.duration,
+    };
+    cursor += scene.duration;
+    return timing;
+  });
+}
+
+function buildSceneMarkup(scene, timing, index) {
   const imageMarkup = scene.type === "image" ? buildImageMarkup(scene.imageName) : "";
-  return `<section id="scene-${index}" class="scene">
+  return `<section id="scene-${index}" class="scene" data-start="${timing.start}" data-duration="${timing.duration}" data-track-index="1">
         <div class="accent"></div>
         <div class="content">
           <div class="kicker">${escapeHtml(scene.kicker)}</div>
@@ -343,6 +380,7 @@ function buildSceneMarkup(scene, index) {
           <h1 class="${scene.type === "image" ? "slide-title" : ""}">${escapeHtml(scene.title)}</h1>
           ${scene.caption ? `<p class="caption">${escapeHtml(scene.caption)}</p>` : ""}
         </div>
+        <div class="progress"><span></span></div>
       </section>`;
 }
 
