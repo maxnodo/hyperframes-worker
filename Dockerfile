@@ -1,7 +1,11 @@
-FROM node:20-alpine
+FROM node:20-slim
 
 # ffmpeg disponible para el stub de render (y útil para HyperFrames real)
-RUN apk add --no-cache ffmpeg
+RUN apt-get update && apt-get install -y \
+  ffmpeg \
+  fonts-dejavu-core \
+  fontconfig \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

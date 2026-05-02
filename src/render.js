@@ -3,6 +3,8 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 
+const DEJAVU_SANS_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+
 /**
  * STUB: genera un MP4 dummy con ffmpeg para validar el pipeline.
  *
@@ -26,7 +28,7 @@ export async function renderWithHyperframes(job, outPath) {
     "-f", "lavfi",
     "-i", `color=c=0x4F46E5:size=${size}:duration=4:rate=30`,
     "-vf",
-    `drawtext=text='${text}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=(h-text_h)/2`,
+    `drawtext=fontfile=${DEJAVU_SANS_FONT}:text='${text}':fontcolor=white:fontsize=64:x=(w-text_w)/2:y=(h-text_h)/2`,
     "-c:v", "libx264",
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
