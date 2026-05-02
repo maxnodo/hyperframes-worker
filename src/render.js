@@ -18,8 +18,9 @@ export async function renderWithHyperframes(job, outPath) {
   await mkdir(path.dirname(outPath), { recursive: true });
 
   const input = normalizeInput(job);
+  console.log("final content:", input);
   const { width, height } = formatToSize(input.format);
-  const duration = calculateDuration(input.imageNames.length);
+  const duration = calculateDuration(input.scenes.length);
   const projectDir = path.join(path.dirname(outPath), "hyperframes-project");
 
   await rm(projectDir, { recursive: true, force: true });
@@ -38,12 +39,71 @@ export async function renderWithHyperframes(job, outPath) {
 
 function normalizeInput(job) {
   const data = job?.input_data ?? {};
+  const promptContent = data.prompt && !data.mainText
+    ? parsePromptToScenes(data.prompt)
+    : {};
+  const mainText = cleanText(data.mainText ?? promptContent.mainText ?? job?.title ?? "Video");
+  const subText = cleanText(data.subText ?? promptContent.subText ?? "");
+  const scenes = normalizeScenes(data.scenes ?? promptContent.scenes);
+
   return {
-    mainText: cleanText(data.mainText ?? job?.title ?? "Video"),
-    subText: cleanText(data.subText ?? ""),
+    mainText,
+    subText,
     imageNames: normalizeImageNames(data.imageNames),
+    scenes,
     format: data.format ?? "9:16",
   };
+}
+
+function parsePromptToScenes(prompt) {
+  const cleaned = cleanPrompt(prompt);
+  const explicitScenes = [...cleaned.matchAll(/(?:^|\s)(?:escena|scene|slide)\s*\d*\s*[:.-]\s*([^.!?]+[.!?]?)/gi)]
+    .map((match) => toSceneText(match[1]))
+    .filter(Boolean);
+  const sentences = cleaned
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const candidates = sentences.length > 0 ? sentences : cleaned.split(/[,;]+/);
+  const sceneTexts = (explicitScenes.length > 0 ? explicitScenes : candidates)
+    .map((part) => toSceneText(part))
+    .filter((part) => !isPromptInstruction(part))
+    .filter(Boolean)
+    .slice(0, 5);
+  const fallbackScenes = sceneTexts.length > 0
+    ? sceneTexts
+    : ["Idea principal", "Mensaje clave", "Cierre"];
+
+  return {
+    mainText: toHeadline(fallbackScenes[0]),
+    subText: fallbackScenes[1] ? toCaption(fallbackScenes[1]) : "",
+    scenes: fallbackScenes.map((text) => ({
+      text,
+      duration: 2.5,
+    })),
+  };
+}
+
+function normalizeScenes(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((scene) => {
+      if (typeof scene === "string") {
+        return { text: cleanText(scene).slice(0, 90), duration: 2.5 };
+      }
+      return {
+        text: cleanText(scene?.text).slice(0, 90),
+        duration: normalizeDuration(scene?.duration),
+      };
+    })
+    .filter((scene) => scene.text)
+    .slice(0, 6);
+}
+
+function normalizeDuration(value) {
+  const duration = Number(value);
+  if (!Number.isFinite(duration)) return 2.5;
+  return Math.min(6, Math.max(1.5, duration));
 }
 
 function normalizeImageNames(value) {
@@ -66,12 +126,12 @@ function formatToSize(format) {
   }
 }
 
-function calculateDuration(imageCount) {
-  return imageCount > 0 ? 5 + imageCount * 2.5 : 8;
+function calculateDuration(scenesCount) {
+  return scenesCount > 0 ? 5 + scenesCount * 2.5 : 8;
 }
 
-function buildCompositionHtml({ mainText, subText, imageNames, width, height, duration }) {
-  const scenes = buildScenes({ mainText, subText, imageNames });
+function buildCompositionHtml({ mainText, subText, imageNames, scenes: contentScenes, width, height, duration }) {
+  const scenes = buildScenes({ mainText, subText, imageNames, contentScenes });
   const sceneMarkup = scenes
     .map((scene, index) => buildSceneMarkup(scene, index, width, height, duration))
     .join("\n");
@@ -237,7 +297,7 @@ function buildCompositionHtml({ mainText, subText, imageNames, width, height, du
 `;
 }
 
-function buildScenes({ mainText, subText, imageNames }) {
+function buildScenes({ mainText, subText, imageNames, contentScenes }) {
   const scenes = [
     {
       type: "title",
@@ -247,17 +307,21 @@ function buildScenes({ mainText, subText, imageNames }) {
     },
   ];
 
-  for (const [index, imageName] of imageNames.entries()) {
+  const maxScenes = Math.max(imageNames.length, contentScenes.length);
+  for (let index = 0; index < maxScenes; index += 1) {
+    const imageName = imageNames[index];
+    const contentScene = contentScenes[index];
     scenes.push({
-      type: "image",
+      type: imageName ? "image" : "text",
       kicker: `Slide ${index + 1}`,
-      title: mainText,
+      title: contentScene?.text ?? mainText,
       caption: subText,
       imageName,
+      duration: contentScene?.duration,
     });
   }
 
-  if (imageNames.length === 0) {
+  if (maxScenes === 0) {
     scenes.push({
       type: "title",
       kicker: "Ready",
@@ -295,6 +359,35 @@ function isRenderableImageSource(value) {
 
 function cleanText(value) {
   return String(value ?? "").trim().slice(0, 240);
+}
+
+function cleanPrompt(value) {
+  return String(value ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toHeadline(value) {
+  return toSceneText(value).slice(0, 64) || "Video";
+}
+
+function toCaption(value) {
+  return toSceneText(value).slice(0, 96);
+}
+
+function toSceneText(value) {
+  return String(value ?? "")
+    .replace(/^(objetivo|contexto|instrucciones|prompt|escena|scene|slide)\s*[:.-]\s*/i, "")
+    .replace(/^(crear|generar|hacer|producir|renderizar)\s+(un|una)\s+video\s+/i, "")
+    .replace(/^[\s#>*\-–—\d.)]+/, "")
+    .trim()
+    .slice(0, 90);
+}
+
+function isPromptInstruction(value) {
+  return /^(crear|generar|hacer|producir|renderizar|necesito|quiero)\b/i.test(value)
+    || /\b(no deben aparecer|instrucciones internas|prompt completo)\b/i.test(value);
 }
 
 function escapeHtml(value) {
