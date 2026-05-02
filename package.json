@@ -1,0 +1,20 @@
+{
+  "name": "hyperframes-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Worker que procesa jobs de video_jobs: renderiza con HyperFrames y sube el resultado a Supabase Storage.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "render:once": "node src/run-once.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5"
+  }
+}
